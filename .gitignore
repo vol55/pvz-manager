@@ -3,7 +3,6 @@
 __pycache__/
 
 .env
-.env.*
 service-account.json
 
 cache/
