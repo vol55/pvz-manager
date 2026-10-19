@@ -1,0 +1,17 @@
+.idea/
+.venv/
+__pycache__/
+
+.env
+.env.*
+service-account.json
+
+cache/
+logs/
+config/reference.py
+
+alembic/README
+caddy_data/
+caddy_config/
+db_data/
+Caddyfile

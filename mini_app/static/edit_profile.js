@@ -1,0 +1,1457 @@
+document.addEventListener("DOMContentLoaded", () => {
+  initTelegramWebApp();
+  initPhoneMasks();
+  initPhoneValidation();
+  initCardMasks();
+  initCardValidation();
+  initSalaryPaymentFields();
+  initComboboxes();
+  initSaveButtonDirtyState();
+  initProfileSubmit();
+  initExitButton();
+});
+
+function initTelegramWebApp() {
+  if (window.Telegram && Telegram.WebApp) {
+    Telegram.WebApp.ready();
+    Telegram.WebApp.expand();
+  }
+}
+
+function initPhoneMasks() {
+  const phoneInputs = document.querySelectorAll("[data-phone-mask]");
+  const formatRuPhone = (raw) => {
+    let digits = (raw || "").replace(/\D/g, "");
+
+    // +7/7XXXXXXXXXX -> 8XXXXXXXXXX
+    // 9XXXXXXXXX     -> 89XXXXXXXXX
+    // 8XXXXXXXXXX    -> как есть
+    if (digits.startsWith("7")) digits = "8" + digits.slice(1);
+    if (digits.startsWith("9")) digits = "8" + digits;
+
+    digits = digits.slice(0, 11);
+    if (!digits) return "";
+
+    if (!digits.startsWith("8")) digits = "8" + digits.slice(0, 10);
+
+    const d = digits.slice(1);
+    let out = "8";
+
+    if (d.length > 0) out += ` (${d.slice(0, 3)}`;
+    if (d.length >= 3) out += ")";
+    if (d.length > 3) out += ` ${d.slice(3, 6)}`;
+    if (d.length > 6) out += `-${d.slice(6, 8)}`;
+    if (d.length > 8) out += `-${d.slice(8, 10)}`;
+
+    return out;
+  };
+
+  const countDigitsBefore = (value, caretPos) => {
+    return (value.slice(0, caretPos).match(/\d/g) || []).length;
+  };
+
+  const countLocalDigitsBefore = (value, caretPos) => {
+    const digits = (value.slice(0, caretPos).match(/\d/g) || []).join("");
+    if (!digits) return 0;
+    if (digits[0] === "7" || digits[0] === "8") return Math.max(0, digits.length - 1);
+    return digits.length;
+  };
+
+  const caretFromDigitIndex = (formatted, digitIndex) => {
+    if (digitIndex <= 0) return 0;
+
+    let seen = 0;
+    for (let i = 0; i < formatted.length; i++) {
+      if (/\d/.test(formatted[i])) {
+        seen += 1;
+        if (seen === digitIndex) return i + 1;
+      }
+    }
+
+    return formatted.length;
+  };
+
+  phoneInputs.forEach((input) => {
+    input.value = formatRuPhone(input.value);
+
+    input.addEventListener("keydown", (e) => {
+      if (e.key !== "Backspace") return;
+
+      const start = input.selectionStart ?? 0;
+      const end = input.selectionEnd ?? 0;
+      if (start !== end || start <= 0) return;
+
+      const current = input.value;
+      const prevChar = current[start - 1];
+
+      if (prevChar && /\D/.test(prevChar)) {
+        e.preventDefault();
+
+        const digits = current.replace(/\D/g, "");
+        const digitIndexBeforeCaret = countDigitsBefore(current, start);
+
+        if (digitIndexBeforeCaret <= 1) return;
+
+        const removeAt = digitIndexBeforeCaret - 1;
+        const nextDigits = digits.slice(0, removeAt) + digits.slice(removeAt + 1);
+
+        const nextFormatted = formatRuPhone(nextDigits);
+        input.value = nextFormatted;
+
+        const nextCaret = caretFromDigitIndex(nextFormatted, removeAt);
+        try {
+          input.setSelectionRange(nextCaret, nextCaret);
+        } catch (_) {}
+      }
+    });
+
+    input.addEventListener("input", () => {
+      const rawValue = input.value;
+      const caret = input.selectionStart ?? rawValue.length;
+      const localDigitsBeforeCaret = countLocalDigitsBefore(rawValue, caret);
+
+      const formatted = formatRuPhone(rawValue);
+      input.value = formatted;
+
+      const formattedDigitIndex = formatted ? localDigitsBeforeCaret + 1 : 0;
+      const nextCaret = caretFromDigitIndex(formatted, formattedDigitIndex);
+
+      try {
+        input.setSelectionRange(nextCaret, nextCaret);
+      } catch (_) {}
+    });
+
+    input.addEventListener("blur", () => {
+      input.value = formatRuPhone(input.value);
+    });
+  });
+}
+
+function initCardMasks() {
+  const cardInputs = document.querySelectorAll("[data-card-mask]");
+
+  const formatCardNumber = (raw) => {
+    const digits = (raw || "").replace(/\D/g, "").slice(0, 32);
+    return digits.replace(/(\d{4})(?=\d)/g, "$1 ").trim();
+  };
+
+  cardInputs.forEach((input) => {
+    input.value = formatCardNumber(input.value);
+
+    input.addEventListener("input", () => {
+      const start = input.selectionStart ?? input.value.length;
+      const beforeLen = input.value.length;
+
+      input.value = formatCardNumber(input.value);
+
+      const diff = input.value.length - beforeLen;
+      const nextPos = Math.max(0, start + diff);
+
+      try {
+        input.setSelectionRange(nextPos, nextPos);
+      } catch (_) {}
+    });
+
+    input.addEventListener("blur", () => {
+      input.value = formatCardNumber(input.value);
+    });
+  });
+}
+
+function initSalaryPaymentFields() {
+  const paymentMethodInput = document.querySelector("[data-salary-payment-method]");
+  if (!paymentMethodInput) return;
+
+  const cardFields = Array.from(document.querySelectorAll("[data-salary-payment-card]"));
+  const phoneFields = Array.from(document.querySelectorAll("[data-salary-payment-phone]"));
+  const commonFields = Array.from(document.querySelectorAll("[data-salary-payment-common]"));
+
+  if (!cardFields.length && !phoneFields.length && !commonFields.length) return;
+
+  const prefersReducedMotion =
+    window.matchMedia?.("(prefers-reduced-motion: reduce)")?.matches ?? false;
+
+  const DURATION = 180;
+  const EASING = "ease";
+
+  let lastMethodValue = null;
+  let rafId = 0;
+  let openAnimTimer = null;
+  let closeAnimTimer = null;
+
+  const setDisabledDeep = (root, disabled) => {
+    if (!root) return;
+    root.querySelectorAll("input, select, textarea").forEach((el) => {
+      el.disabled = disabled;
+    });
+  };
+
+  const setRequiredDeep = (root, required) => {
+    if (!root) return;
+
+    root.querySelectorAll("input, select, textarea").forEach((el) => {
+      if (el.type === "hidden") return;
+      el.required = !!required;
+      if (!required) el.setCustomValidity("");
+    });
+  };
+
+  const clearTimers = () => {
+    if (openAnimTimer) {
+      clearTimeout(openAnimTimer);
+      openAnimTimer = null;
+    }
+    if (closeAnimTimer) {
+      clearTimeout(closeAnimTimer);
+      closeAnimTimer = null;
+    }
+  };
+
+  const firstNode = cardFields[0] || phoneFields[0] || commonFields[0];
+  if (!firstNode || !firstNode.parentNode) return;
+
+  const parent = firstNode.parentNode;
+
+  const optionalWrap = document.createElement("div");
+  optionalWrap.setAttribute("data-salary-optional-wrap", "");
+  optionalWrap.style.overflow = "hidden";
+  optionalWrap.style.height = "0px";
+  optionalWrap.style.display = "none";
+  optionalWrap.hidden = true;
+
+  const exclusiveSlot = document.createElement("div");
+  exclusiveSlot.setAttribute("data-salary-exclusive-slot", "");
+  exclusiveSlot.style.position = "relative";
+  exclusiveSlot.style.width = "100%";
+  exclusiveSlot.style.height = "0px";
+
+  const cardGroup = document.createElement("div");
+  cardGroup.setAttribute("data-salary-card-group", "");
+
+  const phoneGroup = document.createElement("div");
+  phoneGroup.setAttribute("data-salary-phone-group", "");
+
+  [cardGroup, phoneGroup].forEach((group) => {
+    group.style.position = "absolute";
+    group.style.inset = "0";
+    group.style.opacity = "0";
+    group.style.transform = "translateY(-4px)";
+    group.style.pointerEvents = "none";
+    group.style.transition = prefersReducedMotion
+      ? "none"
+      : `opacity ${DURATION}ms ${EASING}, transform ${DURATION}ms ${EASING}`;
+  });
+
+  const commonWrap = document.createElement("div");
+  commonWrap.setAttribute("data-salary-common-wrap", "");
+
+  optionalWrap.appendChild(exclusiveSlot);
+  optionalWrap.appendChild(commonWrap);
+  parent.insertBefore(optionalWrap, firstNode);
+
+  cardFields.forEach((el) => {
+    el.removeAttribute("hidden");
+    el.hidden = false;
+    el.style.display = "";
+    cardGroup.appendChild(el);
+  });
+
+  phoneFields.forEach((el) => {
+    el.removeAttribute("hidden");
+    el.hidden = false;
+    el.style.display = "";
+    phoneGroup.appendChild(el);
+  });
+
+  commonFields.forEach((el) => {
+    el.removeAttribute("hidden");
+    el.hidden = false;
+    el.style.display = "";
+    commonWrap.appendChild(el);
+  });
+
+  exclusiveSlot.appendChild(cardGroup);
+  exclusiveSlot.appendChild(phoneGroup);
+
+  setDisabledDeep(cardGroup, true);
+  setDisabledDeep(phoneGroup, true);
+  setDisabledDeep(commonWrap, true);
+
+  setRequiredDeep(cardGroup, false);
+  setRequiredDeep(phoneGroup, false);
+  setRequiredDeep(commonWrap, false);
+
+  const measureGroupHeight = (group) => {
+    if (!group) return 0;
+
+    const wrapWasHidden = optionalWrap.hidden || optionalWrap.style.display === "none";
+    const wrapPrev = {
+      hidden: optionalWrap.hidden,
+      display: optionalWrap.style.display,
+      visibility: optionalWrap.style.visibility,
+      position: optionalWrap.style.position,
+      left: optionalWrap.style.left,
+      top: optionalWrap.style.top,
+      height: optionalWrap.style.height,
+      overflow: optionalWrap.style.overflow,
+      pointerEvents: optionalWrap.style.pointerEvents,
+      transition: optionalWrap.style.transition,
+    };
+
+    if (wrapWasHidden) {
+      optionalWrap.hidden = false;
+      optionalWrap.style.display = "";
+      optionalWrap.style.visibility = "hidden";
+      optionalWrap.style.position = "absolute";
+      optionalWrap.style.left = "-99999px";
+      optionalWrap.style.top = "0";
+      optionalWrap.style.height = "auto";
+      optionalWrap.style.overflow = "visible";
+      optionalWrap.style.pointerEvents = "none";
+      optionalWrap.style.transition = "none";
+    }
+
+    const prev = {
+      position: group.style.position,
+      inset: group.style.inset,
+      opacity: group.style.opacity,
+      transform: group.style.transform,
+      pointerEvents: group.style.pointerEvents,
+      visibility: group.style.visibility,
+      display: group.style.display,
+    };
+
+    group.style.position = "static";
+    group.style.inset = "auto";
+    group.style.opacity = "0";
+    group.style.transform = "none";
+    group.style.pointerEvents = "none";
+    group.style.visibility = "hidden";
+    group.style.display = "block";
+
+    const h = Math.ceil(group.scrollHeight);
+
+    group.style.position = prev.position;
+    group.style.inset = prev.inset;
+    group.style.opacity = prev.opacity;
+    group.style.transform = prev.transform;
+    group.style.pointerEvents = prev.pointerEvents;
+    group.style.visibility = prev.visibility;
+    group.style.display = prev.display;
+
+    if (wrapWasHidden) {
+      optionalWrap.hidden = wrapPrev.hidden;
+      optionalWrap.style.display = wrapPrev.display;
+      optionalWrap.style.visibility = wrapPrev.visibility;
+      optionalWrap.style.position = wrapPrev.position;
+      optionalWrap.style.left = wrapPrev.left;
+      optionalWrap.style.top = wrapPrev.top;
+      optionalWrap.style.height = wrapPrev.height;
+      optionalWrap.style.overflow = wrapPrev.overflow;
+      optionalWrap.style.pointerEvents = wrapPrev.pointerEvents;
+      optionalWrap.style.transition = wrapPrev.transition;
+    }
+    return h;
+  };
+
+  let exclusiveHeight = 0;
+
+  const recalcExclusiveHeight = () => {
+    const cardH = measureGroupHeight(cardGroup);
+    const phoneH = measureGroupHeight(phoneGroup);
+    exclusiveHeight = Math.max(cardH, phoneH, 0);
+    exclusiveSlot.style.height = `${exclusiveHeight}px`;
+  };
+
+  const getOpenHeight = () => {
+    const commonHeight =
+      commonWrap.style.display === "none" ? 0 : Math.ceil(commonWrap.scrollHeight || 0);
+    return exclusiveHeight + commonHeight;
+  };
+
+  const openOptionalWrap = (animated) => {
+    clearTimers();
+
+    if (prefersReducedMotion || !animated) {
+      optionalWrap.hidden = false;
+      optionalWrap.style.display = "";
+      optionalWrap.style.height = "auto";
+      optionalWrap.style.transition = "";
+      optionalWrap.style.overflow = "visible";
+      return;
+    }
+
+    if (!optionalWrap.hidden && optionalWrap.style.display !== "none") return;
+
+    optionalWrap.hidden = false;
+    optionalWrap.style.display = "";
+    optionalWrap.style.overflow = "hidden";
+    optionalWrap.style.transition = "none";
+    optionalWrap.style.height = "0px";
+
+    const targetHeight = getOpenHeight();
+
+    void optionalWrap.offsetHeight;
+
+    optionalWrap.style.transition = `height ${DURATION}ms ${EASING}`;
+    optionalWrap.style.height = `${targetHeight}px`;
+
+    openAnimTimer = setTimeout(() => {
+      optionalWrap.style.transition = "";
+      optionalWrap.style.height = "auto";
+      optionalWrap.style.overflow = "visible";
+      openAnimTimer = null;
+    }, DURATION + 30);
+  };
+
+  const closeOptionalWrap = (animated) => {
+    clearTimers();
+
+    if (prefersReducedMotion || !animated) {
+      optionalWrap.style.transition = "";
+      optionalWrap.style.overflow = "hidden";
+      optionalWrap.style.height = "0px";
+      optionalWrap.style.display = "none";
+      optionalWrap.hidden = true;
+      return;
+    }
+
+    if (optionalWrap.hidden || optionalWrap.style.display === "none") {
+      optionalWrap.style.height = "0px";
+      return;
+    }
+
+    const startHeight = Math.ceil(optionalWrap.getBoundingClientRect().height);
+
+    optionalWrap.style.overflow = "hidden";
+    optionalWrap.style.transition = "none";
+    optionalWrap.style.height = `${startHeight}px`;
+
+    void optionalWrap.offsetHeight;
+
+    optionalWrap.style.transition = `height ${DURATION}ms ${EASING}`;
+    optionalWrap.style.height = "0px";
+
+    closeAnimTimer = setTimeout(() => {
+      optionalWrap.style.transition = "";
+      optionalWrap.style.display = "none";
+      optionalWrap.hidden = true;
+      closeAnimTimer = null;
+    }, DURATION + 30);
+  };
+
+  let currentExclusive = null;
+
+  const setExclusiveInstant = (next) => {
+    currentExclusive = next;
+
+    const isCard = next === "card";
+    const isPhone = next === "phone";
+
+    cardGroup.style.opacity = isCard ? "1" : "0";
+    cardGroup.style.transform = isCard ? "translateY(0)" : "translateY(-4px)";
+    cardGroup.style.pointerEvents = isCard ? "auto" : "none";
+
+    phoneGroup.style.opacity = isPhone ? "1" : "0";
+    phoneGroup.style.transform = isPhone ? "translateY(0)" : "translateY(-4px)";
+    phoneGroup.style.pointerEvents = isPhone ? "auto" : "none";
+
+    setDisabledDeep(cardGroup, !isCard);
+    setDisabledDeep(phoneGroup, !isPhone);
+
+    setRequiredDeep(cardGroup, isCard);
+    setRequiredDeep(phoneGroup, isPhone);
+  };
+
+  const switchExclusive = (next, animated) => {
+    if (next === currentExclusive) return;
+
+    if (prefersReducedMotion || !animated) {
+      setExclusiveInstant(next);
+      return;
+    }
+
+    currentExclusive = next;
+
+    const isCard = next === "card";
+    const isPhone = next === "phone";
+
+    cardGroup.style.pointerEvents = isCard ? "auto" : "none";
+    phoneGroup.style.pointerEvents = isPhone ? "auto" : "none";
+
+    setDisabledDeep(cardGroup, !isCard);
+    setDisabledDeep(phoneGroup, !isPhone);
+
+    setRequiredDeep(cardGroup, isCard);
+    setRequiredDeep(phoneGroup, isPhone);
+
+    requestAnimationFrame(() => {
+      cardGroup.style.opacity = isCard ? "1" : "0";
+      cardGroup.style.transform = isCard ? "translateY(0)" : "translateY(-4px)";
+
+      phoneGroup.style.opacity = isPhone ? "1" : "0";
+      phoneGroup.style.transform = isPhone ? "translateY(0)" : "translateY(-4px)";
+    });
+  };
+
+  const setCommonVisible = (visible) => {
+    commonWrap.style.display = visible ? "" : "none";
+    setDisabledDeep(commonWrap, !visible);
+    setRequiredDeep(commonWrap, visible);
+  };
+
+  const applyPaymentFields = (animated = true) => {
+    const value = (paymentMethodInput.value || "").trim();
+
+    if (paymentMethodInput.tagName === "SELECT" && paymentMethodInput.value === "") {
+      paymentMethodInput.selectedIndex = 0;
+    }
+
+    if (value === lastMethodValue) return;
+    lastMethodValue = value;
+
+    let nextExclusive = null;
+    let showOptional = false;
+
+    if (value === "На карту") {
+      nextExclusive = "card";
+      showOptional = true;
+    } else if (value === "По номеру телефона") {
+      nextExclusive = "phone";
+      showOptional = true;
+    }
+
+    if (!showOptional) {
+      setDisabledDeep(cardGroup, true);
+      setDisabledDeep(phoneGroup, true);
+      setDisabledDeep(commonWrap, true);
+
+      setRequiredDeep(cardGroup, false);
+      setRequiredDeep(phoneGroup, false);
+      setRequiredDeep(commonWrap, false);
+
+      switchExclusive(null, false);
+      setCommonVisible(false);
+      closeOptionalWrap(animated);
+      return;
+    }
+
+    setCommonVisible(true);
+    recalcExclusiveHeight();
+    openOptionalWrap(animated);
+    switchExclusive(nextExclusive, animated);
+  };
+
+  const scheduleApply = (animated = true) => {
+    cancelAnimationFrame(rafId);
+    rafId = requestAnimationFrame(() => applyPaymentFields(animated));
+  };
+
+  const onViewportChange = () => {
+    if (optionalWrap.hidden) return;
+
+    recalcExclusiveHeight();
+
+    if (optionalWrap.style.height && optionalWrap.style.height !== "auto") {
+      const nextHeight = getOpenHeight();
+      optionalWrap.style.height = `${nextHeight}px`;
+    }
+  };
+
+  window.addEventListener("resize", onViewportChange);
+  window.visualViewport?.addEventListener("resize", onViewportChange);
+
+  recalcExclusiveHeight();
+  setCommonVisible(false);
+  switchExclusive(null, false);
+  closeOptionalWrap(false);
+
+  ["input", "change"].forEach((evt) => {
+    paymentMethodInput.addEventListener(evt, () => scheduleApply(true));
+  });
+
+  applyPaymentFields(false);
+}
+
+function initComboboxes() {
+  document.querySelectorAll("[data-combobox]").forEach((root) => {
+    const mode = root.dataset.comboboxMode === "strict" ? "strict" : "free";
+
+    const input = root.querySelector("[data-combobox-input]");
+    const dropdown = root.querySelector("[data-combobox-dropdown]");
+    const options = Array.from(root.querySelectorAll("[data-combobox-option]"));
+    const valueInput = root.querySelector("[data-combobox-value]");
+    const form = root.closest("form");
+
+    if (!input || !dropdown || !options.length) return;
+    if (mode === "strict" && !valueInput) return;
+
+    const invalidMessage =
+      root.dataset.comboboxInvalidMessage || "Выберите значение из списка";
+    const isRequired = input.hasAttribute("required");
+    const showAllOptions = root.hasAttribute("data-combobox-show-all");
+    const noKeyboard = root.hasAttribute("data-combobox-no-keyboard");
+
+    if (noKeyboard) {
+      input.setAttribute("readonly", "readonly");
+      input.setAttribute("inputmode", "none");
+    }
+
+    let activeIndex = -1;
+
+    const normalize = (s) => (s || "").trim().toLowerCase();
+    const visibleOptions = () => options.filter((o) => !o.hidden);
+
+    const findExact = (value) => {
+      const q = normalize(value);
+      return options.find((opt) => normalize(opt.dataset.value) === q);
+    };
+
+    const page = root.closest(".page") || document.body;
+
+    const setBottomSpace = (px) => {
+      const bottomSpace = Math.max(0, Math.ceil(px));
+      page.style.paddingBottom = bottomSpace ? `${bottomSpace}px` : "";
+    };
+
+    const getScrollTarget = () => {
+      if (page === document.body) return window;
+
+      const style = window.getComputedStyle(page);
+      const scrollableByCss = /(auto|scroll)/.test(style.overflowY);
+      const scrollableBySize = page.scrollHeight > page.clientHeight + 1;
+
+      return scrollableByCss || scrollableBySize ? page : window;
+    };
+
+    const updateDropdownPlacement = () => {
+      const vv = window.visualViewport;
+      const viewportTop = vv ? vv.offsetTop : 0;
+      const viewportHeight = vv ? vv.height : window.innerHeight;
+      const viewportBottom = viewportTop + viewportHeight;
+
+      const rect = input.getBoundingClientRect();
+
+      const gap = 6;
+      const margin = 8;
+      const minHeight = 96;
+      const preferredMaxHeight = 220;
+
+      dropdown.style.top = `calc(100% + ${gap}px)`;
+      dropdown.style.bottom = "auto";
+
+      const contentHeight = dropdown.scrollHeight || preferredMaxHeight;
+      const desiredHeight = Math.max(minHeight, Math.min(preferredMaxHeight, contentHeight));
+      dropdown.style.maxHeight = `${desiredHeight}px`;
+
+      const spaceBelow = Math.max(0, viewportBottom - rect.bottom - gap - margin);
+      const missing = Math.max(0, desiredHeight - spaceBelow);
+      setBottomSpace(missing + margin);
+
+      requestAnimationFrame(() => {
+        if (!root.classList.contains("open")) return;
+
+        const vv2 = window.visualViewport;
+        const bottom2 = vv2 ? vv2.offsetTop + vv2.height : window.innerHeight;
+
+        const dropRect = dropdown.getBoundingClientRect();
+        const overflow = dropRect.bottom - (bottom2 - margin);
+
+        if (overflow > 0) {
+          const target = getScrollTarget();
+          if (target === window) {
+            window.scrollBy({ top: overflow, behavior: "smooth" });
+          } else {
+            target.scrollBy({ top: overflow, behavior: "smooth" });
+          }
+        }
+      });
+    };
+    const open = () => {
+      if (document.activeElement !== input) return;
+      root.classList.add("open");
+      updateDropdownPlacement();
+    };
+
+    const close = () => {
+      root.classList.remove("open");
+      activeIndex = -1;
+      options.forEach((o) => o.classList.remove("is-active"));
+      dropdown.style.top = "";
+      dropdown.style.bottom = "";
+      dropdown.style.maxHeight = "";
+      setBottomSpace(0);
+    };
+
+    const setSelected = (value) => {
+      const exact = findExact(value);
+      if (!exact) return;
+
+      const canonical = exact.dataset.value;
+      input.value = canonical;
+      input.setCustomValidity("");
+
+      if (mode === "strict") valueInput.value = canonical;
+
+      input.dispatchEvent(new Event("input", { bubbles: true }));
+      input.dispatchEvent(new Event("change", { bubbles: true }));
+
+      close();
+      setTimeout(() => input.blur(), 0);
+    };
+
+    const filterOptions = () => {
+      const typedQ = normalize(input.value);
+      const q = showAllOptions ? "" : typedQ;
+      const showOnEmpty = mode === "strict" || showAllOptions;
+
+      if (!q && !showOnEmpty) {
+        options.forEach((opt) => {
+          opt.hidden = false;
+          opt.classList.remove("is-active");
+        });
+        activeIndex = -1;
+        close();
+        return;
+      }
+
+      let anyVisible = false;
+
+      options.forEach((opt) => {
+        const text = normalize(opt.dataset.value);
+        const match = !q ? true : text.includes(q);
+        opt.hidden = !match;
+        opt.classList.remove("is-active");
+        if (match) anyVisible = true;
+      });
+
+      activeIndex = -1;
+
+      if (mode === "strict") {
+        const exact = findExact(input.value);
+        if (exact) {
+          valueInput.value = exact.dataset.value;
+          input.setCustomValidity("");
+        } else {
+          valueInput.value = "";
+        }
+      }
+
+      if (anyVisible) open();
+      else close();
+    };
+
+    const highlightActive = () => {
+      const visible = visibleOptions();
+      visible.forEach((o) => o.classList.remove("is-active"));
+
+      if (activeIndex >= 0 && activeIndex < visible.length) {
+        visible[activeIndex].classList.add("is-active");
+        visible[activeIndex].scrollIntoView({ block: "nearest" });
+      }
+    };
+
+    const onViewportChange = () => {
+      if (root.classList.contains("open")) updateDropdownPlacement();
+    };
+
+    window.addEventListener("resize", onViewportChange);
+    window.visualViewport?.addEventListener("resize", onViewportChange);
+    window.visualViewport?.addEventListener("scroll", onViewportChange);
+    page.addEventListener?.("scroll", onViewportChange, { passive: true });
+
+    if (mode === "strict") {
+      const initial = (valueInput.value || input.value || "").trim();
+      if (initial) {
+        const exact = findExact(initial);
+        if (exact) {
+          const canonical = exact.dataset.value;
+          input.value = canonical;
+          valueInput.value = canonical;
+        } else {
+          input.value = "";
+          valueInput.value = "";
+        }
+      }
+    }
+
+    const handleInputInteract = () => {
+      if (mode === "strict") {
+        filterOptions();
+      } else if (input.value.trim()) {
+        filterOptions();
+      }
+    };
+
+    input.addEventListener("focus", handleInputInteract);
+    input.addEventListener("click", handleInputInteract);
+
+    input.addEventListener("input", () => {
+      input.setCustomValidity("");
+      filterOptions();
+    });
+
+    input.addEventListener("keydown", (e) => {
+      const visible = visibleOptions();
+
+      if (e.key === "Escape") {
+        close();
+        return;
+      }
+
+      if (
+        (e.key === "ArrowDown" || e.key === "ArrowUp") &&
+        !root.classList.contains("open")
+      ) {
+        filterOptions();
+      }
+
+      if (!visible.length) {
+        if (e.key === "Enter" && mode === "strict") {
+          const hasTypedText = !!input.value.trim();
+          if (isRequired || hasTypedText) {
+            e.preventDefault();
+            valueInput.value = "";
+            input.setCustomValidity(invalidMessage);
+            input.reportValidity();
+          }
+        }
+        return;
+      }
+
+      if (e.key === "ArrowDown") {
+        e.preventDefault();
+        activeIndex = (activeIndex + 1) % visible.length;
+        highlightActive();
+        return;
+      }
+
+      if (e.key === "ArrowUp") {
+        e.preventDefault();
+        activeIndex = (activeIndex - 1 + visible.length) % visible.length;
+        highlightActive();
+        return;
+      }
+
+      if (e.key === "Enter") {
+        if (activeIndex >= 0) {
+          e.preventDefault();
+          setSelected(visible[activeIndex].dataset.value);
+          return;
+        }
+
+        if (mode === "strict") {
+          const exact = findExact(input.value);
+          if (exact) {
+            e.preventDefault();
+            setSelected(exact.dataset.value);
+            return;
+          }
+
+          const hasTypedText = !!input.value.trim();
+          if (isRequired || hasTypedText) {
+            e.preventDefault();
+            valueInput.value = "";
+            input.setCustomValidity(invalidMessage);
+            input.reportValidity();
+          }
+        }
+      }
+    });
+
+    options.forEach((opt) => {
+      opt.addEventListener("mousedown", (e) => {
+        e.preventDefault();
+        setSelected(opt.dataset.value);
+      });
+
+      opt.addEventListener("click", () => {
+        setSelected(opt.dataset.value);
+      });
+    });
+
+    input.addEventListener("blur", () => {
+      setTimeout(() => {
+        if (mode === "strict") {
+          const exact = findExact(input.value);
+
+          if (exact) {
+            const canonical = exact.dataset.value;
+            input.value = canonical;
+            valueInput.value = canonical;
+            input.setCustomValidity("");
+          } else if (valueInput.value) {
+            input.value = valueInput.value;
+            input.setCustomValidity("");
+          } else {
+            input.value = "";
+            input.setCustomValidity(isRequired ? invalidMessage : "");
+          }
+        } else {
+          input.setCustomValidity("");
+        }
+
+        close();
+      }, 100);
+    });
+
+    if (form && mode === "strict") {
+      form.addEventListener("submit", (e) => {
+        const exact = findExact(input.value);
+
+        if (exact) {
+          const canonical = exact.dataset.value;
+          input.value = canonical;
+          valueInput.value = canonical;
+          input.setCustomValidity("");
+        }
+
+        const selectedValue = (valueInput.value || "").trim();
+        const hasTypedText = !!(input.value || "").trim();
+
+        if (isRequired && !selectedValue) {
+          e.preventDefault();
+          input.setCustomValidity(invalidMessage);
+          input.focus();
+          input.reportValidity?.();
+          open();
+          return;
+        }
+
+        if (!selectedValue && hasTypedText) {
+          e.preventDefault();
+          input.setCustomValidity(invalidMessage);
+          input.focus();
+          input.reportValidity?.();
+          open();
+          return;
+        }
+      });
+    }
+
+    document.addEventListener("click", (e) => {
+      if (!root.contains(e.target)) close();
+    });
+  });
+}
+
+function initPhoneValidation() {
+  const phoneInputs = document.querySelectorAll("[data-phone-mask]");
+  const isPhoneValid = (value) => {
+    const digits = (value || "").replace(/\D/g, "");
+    return digits.length === 11 && digits.startsWith("8");
+  };
+
+  const isVisible = (el) => {
+    return !!(el.offsetWidth || el.offsetHeight || el.getClientRects().length);
+  };
+
+  const validateInput = (input) => {
+    const value = (input.value || "").trim();
+
+    if (!isVisible(input)) {
+      input.setCustomValidity("");
+      return true;
+    }
+
+    if (!value && !input.required) {
+      input.setCustomValidity("");
+      return true;
+    }
+
+    if (!value && input.required) {
+      input.setCustomValidity("");
+      return false;
+    }
+
+    if (!isPhoneValid(value)) {
+      input.setCustomValidity("Введите телефон полностью: 8 (123) 456-78-90");
+      return false;
+    }
+
+    input.setCustomValidity("");
+    return true;
+  };
+
+  phoneInputs.forEach((input) => {
+    input.addEventListener("input", () => validateInput(input));
+    input.addEventListener("blur", () => validateInput(input));
+
+    const form = input.closest("form");
+    if (form) {
+      form.addEventListener("submit", (e) => {
+        const ok = validateInput(input);
+        if (!ok) {
+          e.preventDefault();
+          input.reportValidity();
+        }
+      });
+    }
+  });
+}
+
+function initSaveButtonDirtyState() {
+  const form = document.querySelector("form");
+  if (!form) return;
+
+  const submitBtn = form.querySelector('button[type="submit"], input[type="submit"]');
+  if (!submitBtn) return;
+
+  const serializeForm = () => {
+    const fd = new FormData(form);
+    const pairs = [];
+
+    for (const [key, value] of fd.entries()) {
+      pairs.push([key, String(value)]);
+    }
+
+    pairs.sort((a, b) => {
+      if (a[0] === b[0]) return a[1].localeCompare(b[1], "ru");
+      return a[0].localeCompare(b[0], "ru");
+    });
+
+    return JSON.stringify(pairs);
+  };
+
+  let initialState = serializeForm();
+
+  const syncButtonState = () => {
+    const currentState = serializeForm();
+    const isDirty = currentState !== initialState;
+    submitBtn.disabled = !isDirty;
+    submitBtn.classList.toggle("is-disabled", !isDirty);
+  };
+
+  const markClean = () => {
+    initialState = serializeForm();
+    syncButtonState();
+  };
+
+  form.__markClean = markClean;
+  form.__isDirty = () => serializeForm() !== initialState;
+
+  let syncRaf = 0;
+  const scheduleSync = () => {
+    cancelAnimationFrame(syncRaf);
+    syncRaf = requestAnimationFrame(syncButtonState);
+  };
+
+  syncButtonState();
+
+  form.addEventListener("input", scheduleSync);
+  form.addEventListener("change", scheduleSync);
+
+  const mo = new MutationObserver(() => scheduleSync());
+  mo.observe(form, {
+    subtree: true,
+    attributes: true,
+    attributeFilter: ["disabled", "hidden", "name"],
+  });
+
+  form.addEventListener("submit", (e) => {
+    const currentState = serializeForm();
+    if (currentState === initialState) e.preventDefault();
+  });
+}
+
+
+async function mountTgsSticker(container, tgsUrl) {
+  if (!container || !tgsUrl || !window.pako || !window.lottie) {
+    container.textContent = "🦆";
+    return () => {};
+  }
+
+  try {
+    const res = await fetch(tgsUrl, { cache: "force-cache" });
+    if (!res.ok) throw new Error(`HTTP ${res.status}`);
+
+    const gzBytes = new Uint8Array(await res.arrayBuffer());
+    const jsonBytes = window.pako.ungzip(gzBytes);
+    const jsonText = new TextDecoder("utf-8").decode(jsonBytes);
+    const animationData = JSON.parse(jsonText);
+
+    const anim = window.lottie.loadAnimation({
+      container,
+      renderer: "svg",
+      loop: true,
+      autoplay: true,
+      animationData,
+      rendererSettings: { preserveAspectRatio: "xMidYMid meet" },
+    });
+
+    return () => {
+      try {
+        anim.destroy();
+      } catch (_) {}
+    };
+  } catch (err) {
+    console.error("Failed to load .tgs sticker:", err);
+    container.textContent = "🦆";
+    return () => {};
+  }
+}
+
+
+function initExitButton() {
+  const btn = document.querySelector("[data-close-miniapp]");
+  if (!btn) return;
+
+  btn.addEventListener("click", () => {
+    try {
+      window.Telegram?.WebApp?.HapticFeedback?.impactOccurred("light");
+    } catch (_) {}
+
+    if (window.Telegram?.WebApp?.close) {
+      Telegram.WebApp.close();
+      return;
+    }
+
+    window.close();
+  });
+}
+
+const tg = window.Telegram?.WebApp;
+const prefix = new URL(".", location.href).pathname.replace(/\/$/, "");
+
+async function loadProfile() {
+  const initData = tg?.initData || "";
+
+  const r = await fetch(`${prefix}/api/load-profile`, {
+    method: "POST",
+    headers: {
+      "X-Telegram-Init-Data": initData,
+    },
+  });
+
+  if (!r.ok) throw new Error("Unauthorized");
+  return r.json();
+}
+
+function showLoading(on) {
+  const el = document.getElementById("profile-loading");
+  if (!el) return;
+  el.hidden = !on;
+}
+
+function setFormDisabled(disabled) {
+  const form = document.querySelector("form");
+  if (!form) return;
+
+  const els = form.querySelectorAll("input, button, select, textarea");
+
+  if (disabled) {
+    els.forEach((el) => {
+      // remember previous disabled state
+      el.dataset._wasDisabled = el.disabled ? "1" : "0";
+      el.disabled = true;
+    });
+  } else {
+    els.forEach((el) => {
+      // restore previous disabled state
+      const was = el.dataset._wasDisabled;
+      if (was !== undefined) {
+        el.disabled = was === "1";
+        delete el.dataset._wasDisabled;
+      } else {
+        // if we didn't disable it, don't touch it
+      }
+    });
+  }
+}
+// Sets both hidden + visible parts of your combobox
+function setComboboxValueByHiddenName(hiddenName, value) {
+  const hidden = document.querySelector(`input[type="hidden"][name="${hiddenName}"]`);
+  if (!hidden) return;
+
+  const combobox = hidden.closest("[data-combobox]") || hidden.parentElement;
+  const visible = combobox?.querySelector("[data-combobox-input]");
+
+  hidden.value = value ?? "";
+  if (visible) visible.value = value ?? "";
+
+  // let any combobox/mask logic react
+  hidden.dispatchEvent(new Event("change", { bubbles: true }));
+  if (visible) {
+    visible.dispatchEvent(new Event("input", { bubbles: true }));
+    visible.dispatchEvent(new Event("change", { bubbles: true }));
+  }
+}
+
+function setInputByName(name, value) {
+  const el = document.querySelector(`input[name="${name}"]`);
+  if (!el) return;
+  el.value = value ?? "";
+  el.dispatchEvent(new Event("input", { bubbles: true }));
+  el.dispatchEvent(new Event("change", { bubbles: true }));
+}
+
+function setLock(name, on) {
+  const lock = document.querySelector(`[data-lock-for="${name}"]`);
+  if (lock) lock.hidden = !on;
+}
+
+function prefillProfile(profile) {
+  if (!profile) return;
+
+
+
+  const last = (profile.last_name || "").trim();
+  const first = (profile.first_name || "").trim();
+
+  // plain inputs
+  setInputByName("last_name", last);
+  setInputByName("first_name", first);
+  setInputByName("phone", profile.phone);
+
+  // lock only if prefilled
+  const ln = document.querySelector('input[name="last_name"]');
+  const fn = document.querySelector('input[name="first_name"]');
+
+  const lockLast = !!last;
+  const lockFirst = !!first;
+
+  if (ln) {
+    ln.readOnly = lockLast;
+    ln.classList.toggle("tg-input-readonly", lockLast);
+  }
+
+  if (fn) {
+    fn.readOnly = lockFirst;
+    fn.classList.toggle("tg-input-readonly", lockFirst);
+  }
+
+  setLock("last_name", lockLast);
+  setLock("first_name", lockFirst);
+
+  // comboboxes (hidden field is what gets submitted)
+  setComboboxValueByHiddenName("position", profile.position);
+  setComboboxValueByHiddenName("salary_pickup_point", profile.pvz);
+
+  // salary section mapping
+  setComboboxValueByHiddenName("salary_payment_method", profile.payment_method);
+
+  setInputByName("salary_card_number", profile.salary_card);
+  setInputByName("salary_phone_number", profile.salary_phone);
+  setInputByName("salary_recipient", profile.recipient);
+  setInputByName("bank_name", profile.bank);
+}
+
+document.addEventListener("DOMContentLoaded", async () => {
+  tg?.ready?.();
+  tg?.expand?.();
+
+  // keep salary UI in sync if user changes method
+  const salaryMethodVisible = document.querySelector("[data-salary-payment-method]");
+
+  showLoading(true);
+  setFormDisabled(true);
+
+  try {
+    const { profile } = await loadProfile();
+    prefillProfile(profile);
+  } catch (err) {
+    console.error(err);
+    alert(err?.message || "Ошибка загрузки профиля");
+  } finally {
+    setFormDisabled(false);
+
+    // ✅ reset "dirty" baseline AFTER profile fill & enabling inputs
+    const form = document.querySelector("form");
+    requestAnimationFrame(() => form?.__markClean?.());
+
+    showLoading(false);
+  }
+});
+
+function initProfileSubmit() {
+  const form = document.querySelector("form"); // or document.getElementById("edit-form")
+  if (!form) return;
+
+  form.addEventListener("submit", async (e) => {
+    e.preventDefault();
+    if (typeof form.__isDirty === "function" && !form.__isDirty()) return;
+
+    // run browser validations (required / customValidity from your code)
+    if (!validateStrictComboboxes(form)) return;
+    if (!form.reportValidity()) return;
+
+    const initData = tg?.initData || "";
+
+    // IMPORTANT: build FormData BEFORE disabling fields
+    const fd = new FormData(form);
+
+    showLoading(true);
+    // optional: disable only submit button instead of all inputs
+    const submitBtn = form.querySelector('button[type="submit"], input[type="submit"]');
+    if (submitBtn) submitBtn.disabled = true;
+
+    try {
+      const r = await fetch(`${prefix}/edit-profile`, {   // adjust prefix if needed
+        method: "POST",
+        headers: { "X-Telegram-Init-Data": initData },
+        body: fd,
+      });
+
+      const payload = await r.json().catch(() => ({}));
+      if (!r.ok) throw new Error(payload.detail || "Ошибка сохранения");
+
+      // success: mark form clean so "Сохранить" disables again
+      form.__markClean?.();
+      try { tg?.HapticFeedback?.notificationOccurred("success"); } catch (_) {}
+
+      if (payload?.message) {
+        const msg = payload.message;
+
+        if (payload.toast === "alert") {
+          // нативный телеграм-диалог
+          if (tg?.showAlert) {
+            tg.showAlert(msg, () => {
+              if (payload.close_on_ok) tg.close?.();
+            });
+          } else {
+            alert(msg);
+            if (payload.close_on_ok) tg.close?.();
+          }
+        } else {
+          // обычный снэк для "матерых"
+          showSnack(msg, payload.duration_ms ?? 4000);
+        }
+      }
+
+    } catch (err) {
+      console.error(err);
+      alert(err?.message || "Ошибка сохранения");
+      try { tg?.HapticFeedback?.notificationOccurred("error"); } catch (_) {}
+    } finally {
+      if (submitBtn) submitBtn.disabled = false;
+      showLoading(false);
+    }
+  });
+}
+
+function validateStrictComboboxes(form) {
+  let ok = true;
+
+  form.querySelectorAll('[data-combobox][data-combobox-mode="strict"]').forEach((root) => {
+    const input = root.querySelector("[data-combobox-input]");
+    const valueInput = root.querySelector("[data-combobox-value]");
+    if (!input) return;
+
+    const required =
+      input.hasAttribute("required") ||
+      valueInput?.hasAttribute("required") ||
+      root.dataset.comboboxRequired === "true";
+    const selected = (valueInput?.value || "").trim();
+
+    if (required && !selected) {
+      const msg = root.dataset.comboboxInvalidMessage || "Выберите значение из списка";
+      input.setCustomValidity(msg);
+      input.reportValidity?.();
+      ok = false;
+    } else {
+      input.setCustomValidity("");
+    }
+  });
+
+  return ok;
+}
+
+function initCardValidation() {
+  const cardInputs = document.querySelectorAll("[data-card-mask]");
+
+  const getDigits = (v) => (v || "").replace(/\D/g, "");
+
+  const luhnValid = (digits) => {
+    // optional but recommended
+    let sum = 0;
+    let alt = false;
+    for (let i = digits.length - 1; i >= 0; i--) {
+      let n = digits.charCodeAt(i) - 48;
+      if (alt) {
+        n *= 2;
+        if (n > 9) n -= 9;
+      }
+      sum += n;
+      alt = !alt;
+    }
+    return sum % 10 === 0;
+  };
+
+  const isVisible = (el) => !!(el.offsetWidth || el.offsetHeight || el.getClientRects().length);
+
+  const validateCard = (input) => {
+    // не валидируем, если поле скрыто/выключено (у тебя salary блоки disable)
+    if (input.disabled || !isVisible(input)) {
+      input.setCustomValidity("");
+      return true;
+    }
+
+    const digits = getDigits(input.value);
+
+    // если не required и пусто — ок
+    if (!digits && !input.required) {
+      input.setCustomValidity("");
+      return true;
+    }
+
+    // required и пусто — стандартная ошибка required (не ставим свою)
+    if (!digits && input.required) {
+      input.setCustomValidity("");
+      return false;
+    }
+
+    if (digits.length < 16) {
+      input.setCustomValidity("Введите номер карты полностью");
+      return false;
+    }
+
+    input.setCustomValidity("");
+    return true;
+  };
+
+  cardInputs.forEach((input) => {
+    input.addEventListener("input", () => validateCard(input));
+    input.addEventListener("blur", () => validateCard(input));
+
+    const form = input.closest("form");
+    if (form) {
+      form.addEventListener("submit", (e) => {
+        const ok = validateCard(input);
+        if (!ok) {
+          e.preventDefault();
+          input.reportValidity();
+        }
+      });
+    }
+  });
+}
+
+/** Small toast for 2 seconds */
+function ensureSnackHost() {
+  let host = document.querySelector("[data-snack-host]");
+  if (host) return host;
+
+  host = document.createElement("div");
+  host.setAttribute("data-snack-host", "");
+  document.body.appendChild(host);
+  return host;
+}
+
+function showSnack(message, durationMs = 4000) {
+  const host = ensureSnackHost();
+  host.innerHTML = "";
+
+  const el = document.createElement("div");
+  el.className = "snack";
+  el.textContent = message || "";
+  host.appendChild(el);
+
+  requestAnimationFrame(() => el.classList.add("is-visible"));
+
+  window.setTimeout(() => {
+    el.classList.remove("is-visible");
+    window.setTimeout(() => {
+      if (host.contains(el)) host.removeChild(el);
+    }, 220);
+  }, Math.max(500, durationMs));
+}

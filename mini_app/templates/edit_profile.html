@@ -1,0 +1,239 @@
+<!doctype html>
+<html lang="ru">
+<head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+    <title>Изменить данные</title>
+    <script src="https://telegram.org/js/telegram-web-app.js"></script>
+    <link rel="stylesheet" href="/static/edit_profile.min.css?v=4">
+    <script defer src="/static/edit_profile.min.js?v=4"></script>
+</head>
+<body>
+<div class="page">
+    <div class="card">
+        <form method="post" class="form-grid">
+            <div class="section-title">Основные данные</div>
+
+            <label class="field">
+                <span class="field-label">Фамилия<span class="field-lock" data-lock-for="last_name" hidden>🔒 Не редактируется</span></span>
+                <input class="tg-input"
+                       type="text"
+                       name="last_name"
+                       maxlength="100"
+                       placeholder="Фамилия"
+                       required>
+            </label>
+
+            <label class="field">
+                <span class="field-label">Имя<span class="field-lock" data-lock-for="first_name" hidden>🔒 Не редактируется</span></span>
+                <input class="tg-input"
+                       type="text"
+                       name="first_name"
+                       maxlength="100"
+                       placeholder="Имя"
+                       required>
+            </label>
+
+            <label class="field">
+                <span class="field-label">Должность</span>
+                <div class="combobox"
+                     data-combobox
+                     data-combobox-required="true"
+                     data-combobox-no-keyboard
+                     data-combobox-show-all
+                     data-combobox-mode="strict"
+                     data-combobox-invalid-message="Выберите должность из списка">
+
+                    <input type="hidden"
+                           name="position"
+                           value="{{ selected_position }}"
+                           required
+                           data-combobox-value>
+
+                    <input class="tg-input"
+                           type="text"
+                           maxlength="100"
+                           autocomplete="off"
+                           placeholder="Выберите должность"
+                           value="{{ selected_position }}"
+                           data-combobox-input
+                           required>
+
+                    <div class="combobox-dropdown" data-combobox-dropdown>
+                        {% for position in positions %}
+                        <button type="button"
+                                class="combobox-option"
+                                data-combobox-option
+                                data-value="{{ position }}">
+                            {{ position }}
+                        </button>
+                        {% endfor %}
+                    </div>
+                </div>
+            </label>
+            <label class="field">
+                <span class="field-label">Телефон</span>
+                <input class="tg-input"
+                       type="tel"
+                       name="phone"
+                       maxlength="18"
+                       inputmode="tel"
+                       autocomplete="tel"
+                       data-phone-mask
+                       placeholder="8 (123) 456-78-90"
+                       required>
+            </label>
+
+            <label class="field field-full">
+                <span class="field-label">ПВЗ на котором будете получать ЗП</span>
+                <div class="combobox" data-combobox data-combobox-mode="strict" data-combobox-required="true">
+                    <input type="hidden"
+                           name="salary_pickup_point"
+                           value="{{ selected_pvz }}"
+                           data-combobox-value>
+
+                    <input class="tg-input"
+                           type="text"
+                           maxlength="255"
+                           autocomplete="off"
+                           placeholder="Начните вводить адрес ПВЗ"
+                           value="{{ selected_pvz }}"
+                           required
+                           data-combobox-input>
+
+                    <div class="combobox-dropdown" data-combobox-dropdown>
+                        {% for pvz in pvz_list %}
+                        <button type="button"
+                                class="combobox-option"
+                                data-combobox-option
+                                data-value="{{ pvz }}">
+                            {{ pvz }}
+                        </button>
+                        {% endfor %}
+                    </div>
+                </div>
+            </label>
+
+            <div class="section-title section-top">Выплата зарплаты</div>
+
+            <label class="field field-full">
+                <span class="field-label">Как перечислять ЗП (запасной вариант, можно не заполнять)</span>
+                <div class="combobox"
+                     data-combobox
+                     data-combobox-no-keyboard
+                     data-combobox-show-all
+                     data-combobox-mode="strict"
+                     data-combobox-invalid-message="Выберите способ из списка">
+
+                    <input type="hidden"
+                           name="salary_payment_method"
+                           value="{{ payment_method }}"
+                           data-combobox-value>
+
+                    <input class="tg-input"
+                           type="text"
+                           maxlength="50"
+                           autocomplete="off"
+                           placeholder="Не выбрано"
+                           value="{{ payment_method }}"
+                           data-combobox-input
+                           data-salary-payment-method>
+
+                    <div class="combobox-dropdown" data-combobox-dropdown>
+                        <button type="button"
+                                class="combobox-option"
+                                data-combobox-option
+                                data-value="На карту">
+                            На карту
+                        </button>
+                        <button type="button"
+                                class="combobox-option"
+                                data-combobox-option
+                                data-value="По номеру телефона">
+                            По номеру телефона
+                        </button>
+                        <button type="button"
+                                class="combobox-option"
+                                data-combobox-option
+                                data-value="">
+                            Очистить
+                        </button>
+                    </div>
+                </div>
+            </label>
+
+            <label class="field field-full" data-salary-payment-card hidden>
+                <span class="field-label">Номер карты для ЗП</span>
+                <input class="tg-input"
+                       type="text"
+                       name="salary_card_number"
+                       maxlength="40"
+                       inputmode="numeric"
+                       autocomplete="cc-number"
+                       placeholder="0000 0000 0000 0000"
+                       data-card-mask>
+            </label>
+
+            <label class="field field-full" data-salary-payment-phone hidden>
+                <span class="field-label">Номер телефона для ЗП</span>
+                <input class="tg-input"
+                       type="tel"
+                       name="salary_phone_number"
+                       maxlength="18"
+                       inputmode="tel"
+                       autocomplete="tel"
+                       placeholder="8 (123) 456-78-90"
+                       data-phone-mask>
+            </label>
+
+            <label class="field field-full" data-salary-payment-common hidden>
+                <span class="field-label">Получатель</span>
+                <input class="tg-input"
+                       type="text"
+                       name="salary_recipient"
+                       maxlength="255"
+                       placeholder="Фамилия Имя">
+            </label>
+
+            <label class="field field-full" data-salary-payment-common hidden>
+                <span class="field-label">Банк</span>
+
+                <div class="combobox" data-combobox data-combobox-mode="free">
+                    <input class="tg-input"
+                           type="text"
+                           name="bank_name"
+                           maxlength="100"
+                           autocomplete="off"
+                           placeholder="Название банка"
+                           data-combobox-input>
+
+                    <div class="combobox-dropdown" data-combobox-dropdown>
+                        {% for bank in banks %}
+                        <button type="button"
+                                class="combobox-option"
+                                data-combobox-option
+                                data-value="{{ bank }}">
+                            {{ bank }}
+                        </button>
+                        {% endfor %}
+                    </div>
+                </div>
+            </label>
+
+            <div class="actions field-full">
+                <button type="submit" class="tg-btn">Сохранить</button>
+
+                <button type="button"
+                        class="tg-btn tg-btn-danger"
+                        data-close-miniapp>
+                    Вернуться в telegram
+                </button>
+            </div>
+        </form>
+    </div>
+</div>
+<div id="profile-loading" class="loading-overlay" hidden>
+    <div class="spinner" aria-label="Загрузка"></div>
+</div>
+</body>
+</html>

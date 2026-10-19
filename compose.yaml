@@ -1,0 +1,97 @@
+services:
+  db:
+    image: postgres:17
+    env_file: .env
+    volumes:
+      - ./db_data:/var/lib/postgresql/data
+    healthcheck:
+      test: [ "CMD-SHELL", "pg_isready -U $$POSTGRES_USER -d $$POSTGRES_DB" ]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 10s
+    restart: unless-stopped
+
+  redis:
+    image: redis:7-alpine
+    env_file:
+      - .env
+    command: [ "redis-server", "--appendonly", "yes", "--requirepass", "${REDIS_PASS}" ]
+    volumes:
+      - redis_data:/data
+    healthcheck:
+      test: [ "CMD-SHELL", "redis-cli -a $$REDIS_PASS ping | grep PONG" ]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    restart: unless-stopped
+
+  bot-workers:
+    build: .
+    env_file:
+      - .env
+    environment:
+      SERVICE_NAME: bot-workers
+    command: python3 -m bot_workers.bot
+    volumes:
+      - ./service-account.json:/app/service-account.json:ro
+      - ./logs:/app/logs
+    depends_on:
+      db:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    restart: unless-stopped
+
+  task-runner:
+    build: .
+    env_file:
+      - .env
+    environment:
+      SERVICE_NAME: task-runner
+    command: python3 -m tasks.task_runner
+    volumes:
+      - ./service-account.json:/app/service-account.json:ro
+      - ./logs:/app/logs
+    depends_on:
+      db:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    restart: unless-stopped
+
+  mini-app:
+    build: .
+    env_file:
+      - .env
+    environment:
+      SERVICE_NAME: mini-app
+    command: [ "uvicorn", "mini_app.app:app", "--host", "0.0.0.0", "--port", "8000"]
+    ports:
+      - "8000:8000"
+    volumes:
+      - ./logs:/app/logs
+    depends_on:
+      db:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    restart: unless-stopped
+
+  caddy:
+    image: caddy:2
+    ports:
+      - "80:80"
+      - "443:443"
+    volumes:
+      - ./Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy_data:/data
+      - caddy_config:/config
+    depends_on:
+      - mini-app
+    restart: unless-stopped
+
+volumes:
+  redis_data:
+  caddy_data:
+  caddy_config:

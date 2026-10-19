@@ -1,0 +1,8 @@
+.git
+.gitignore
+__pycache__/
+.venv/
+.idea/
+.env
+.env.*
+service_account.json

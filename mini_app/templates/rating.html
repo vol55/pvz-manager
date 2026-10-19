@@ -1,0 +1,34 @@
+<!doctype html>
+<html lang="ru">
+<head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+    <title>Рейтинг сотрудников</title>
+    <script src="https://telegram.org/js/telegram-web-app.js"></script>
+    <link rel="stylesheet" href="/static/rating.min.css?v=4">
+    <script defer src="/static/rating.min.js?v=4"></script>
+</head>
+<body>
+
+<div id="loading" class="loading-overlay">
+    <div class="spinner" aria-label="Загрузка"></div>
+</div>
+
+<div id="app" class="app" hidden>
+    <header class="page-header">
+        <div>
+            <h1 class="page-title">Рейтинг сотрудников</h1>
+        </div>
+    </header>
+
+    <div id="period-switcher" class="period-switcher" hidden></div>
+
+    <section id="period-info" class="period-info" hidden></section>
+
+    <div id="sections" class="sections"></div>
+
+    <div id="error-message" class="error-message" hidden></div>
+</div>
+
+</body>
+</html>
